@@ -1,0 +1,536 @@
+---
+title: "Fig6, Fig7, Fig8_21DPI"
+output: html_document
+---
+
+############################################################################################################
+# Impact of inoculation practices on microbiota assembly and community stability in a fabricated ecosystem #
+############################################################################################################
+
+#clears current global environment if necessary
+```{r}
+rm(list = ls())
+```
+
+
+# Load all packages needed
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(vegan)
+library(data.table)
+library(ggplot2)
+library(MASS)
+library(plyr)
+library(multcompView)
+library(ggpubr)
+library(DESeq2)
+library(rcompanion)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(tidyverse)
+library(Hmisc)
+```
+
+
+# Load and select 21DPI data
+```{r}
+## load 16S read count table
+counttab<-fread("SynCount.csv")
+counttab2<-counttab[,2:ncol(counttab)]
+rownames(counttab2)<-counttab$Species
+
+## load biodiversity table
+groupdiversity<-fread("Sample_Info.csv")
+groupinfo2<-groupdiversity
+groupinfo2<-as.data.frame(groupinfo2)
+rownames(groupinfo2)<-groupinfo2$ComboInd
+## Check whether count table matches group info
+all(colnames(counttab2) == rownames(groupinfo2))
+
+# select the 21 DPI data
+groupinfo3 <-subset(groupinfo2, 
+                    Inoculated == "Yes" & #"|" means "or"
+                    Inoc_Assay_Length =="21" &
+                    Inoc_Day !="8S" &
+                    Plant == "Brachypodium" 
+                    )
+rownames(groupinfo3) <-groupinfo3$ComboInd
+groupinfo3
+
+
+## this block subset the read counts from the selected groups
+checkvals<-(groupinfo3$ComboInd1)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset<-append(subset,rownames(groupinfo3)[cs])}
+selcols <- which(colnames(counttab2) %in% groupinfo3$ComboInd1)
+counttab3<-counttab2[,..selcols] #[,rownames(groupinfo2)]
+rownames(counttab3)<-rownames(counttab2)
+## Check whether count table matches group info
+all(colnames(counttab3) == rownames(groupinfo3))
+
+#set the organ appealing group in the plot
+groupinfo3 <- groupinfo3[c("Sample_Type", "Inoc_Day", "Inoc_Assay_Length")]
+groupinfo3$Sample_Type <- gsub("unattached sand", "sand", groupinfo3$Sample_Type)
+groupinfo3$Sample_Type <- gsub("Attached sand", "rhizosphere", groupinfo3$Sample_Type)
+groupinfo3$Sample_Type <- gsub("Root", "root", groupinfo3$Sample_Type)
+
+groupinfo3$G4 <- paste(groupinfo3$Sample_Type, "_", groupinfo3$Inoc_Day)
+groupinfo3$G4 <- factor(groupinfo3$G4, levels = c("sand _ 0",
+                                                  "sand _ 3",
+                                                  "sand _ 8",
+                                                  "rhizosphere _ 0",
+                                                  "rhizosphere _ 3",
+                                                  "rhizosphere _ 8",
+                                                  "root _ 0",
+                                                  "root _ 3",
+                                                  "root _ 8"))
+
+
+## define groups from selected data
+selectedgrp=groupinfo3$G4
+```
+
+
+# Calculate Shannin, Simpson, Richness, and Eveness
+```{r}
+selectedgrp = groupinfo3$G4
+
+alpha <- with(groupinfo3, tapply(specnumber(t(counttab3)), selectedgrp, mean))
+gamma <- with(groupinfo3, specnumber(t(counttab3), selectedgrp))
+beta<-gamma/alpha-1
+
+shannon<-diversity(t(counttab3))
+simps<-diversity(t(counttab3),"simpson")
+invsimps<-diversity(t(counttab3),"inv")
+rich<-specnumber(t(counttab3))
+even<-shannon/log(rich)
+
+groupinfo3$Shannon<-shannon
+groupinfo3$Simpson<-simps
+groupinfo3$InvSimpson<-invsimps
+groupinfo3$Richness<-rich
+groupinfo3$Evenness<-even
+```
+
+
+# Fig6A, Calculate and plot alpha diversity
+```{r}
+## set  x, y value for ANOVA & multiple comparison
+selected.Shannon <- data.frame(groupinfo3, lev=selectedgrp, y=groupinfo3$Shannon)
+
+## this block perform ANOVA & Multiple comparison for plotting
+################################################
+a <- aov(y~lev, data=selected.Shannon) # perform ANOVA
+tHSD <- TukeyHSD(a, ordered = FALSE, conf.level = 0.95) #perform post-hoc
+
+generate_label_df <- function(HSD, flev){
+  # Extract labels and factor levels from Tukey post-hoc 
+  Tukey.levels <- HSD[[flev]][,4]
+  Tukey.labels <- multcompLetters(Tukey.levels)['Letters']
+  plot.labels <- names(Tukey.labels[['Letters']])
+  
+  # Get highest quantile for Tukey's 5 number summary and add a bit of space to buffer between    
+  # upper quantile and label placement
+  boxplot.df <- ddply(selected.Shannon, flev, function (x) max(fivenum(x$y)) + 0.4)
+  
+  # Create a data frame out of the factor levels and Tukey's homogenous group letters
+  plot.levels <- data.frame(plot.labels, labels = Tukey.labels[['Letters']],
+                            stringsAsFactors = FALSE)
+  
+  # Merge it with the labels
+  labels.df <- merge(plot.levels, boxplot.df, by.x = 'plot.labels', by.y = flev, sort = FALSE)
+  
+  return(labels.df)
+}
+################################################
+
+## This block Calculate the mean and SD of each condition/treatment pair for plotting the bar plot
+################################################
+agg=aggregate(groupinfo3$Shannon~selectedgrp, data=selected.Shannon, FUN="mean") #mean
+agg$sd=aggregate(groupinfo3$Shannon~selectedgrp, data=selected.Shannon, FUN="sd")$value #add the SD 
+library(ggplot2)
+library(ggpubr)
+dodge <- position_dodge(width=0.9) 
+limits <- aes(ymax=groupinfo3$Shannon+sd, ymin=groupinfo3$Shannon-sd) #Set up the error bars
+################################################
+
+Fig6A <- ggplot(groupinfo3, aes(x=selectedgrp, y=Shannon)) + 
+  geom_boxplot()+
+  geom_point() +
+  ylim(0,3)+
+  
+  #add the ANOVA results to the plot
+  stat_compare_means(method = "anova", size=6, label.x = 1.5, label.y = 2.7) +
+
+  #add the Post hoc results to the plot, the letter shall appear at position mean+SD+0.5
+  geom_text(data = generate_label_df(tHSD, 'lev'), 
+            aes(x = plot.labels, y = V1, label = labels), size=6) +
+  
+  labs(title="21 DPI plant Shannon") +
+  labs(y =expression("Shannon Diversity Index")) +
+  scale_x_discrete(labels=c('0', '3', '8', '0', '3', '8', '0', '3', '8')) +
+  xlab("sand                                    rhizosphere                                     root") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1))
+
+Fig6A 
+```
+
+
+# Fig6B, start plotting the biodiversity chart
+```{r}
+#### PCoA (Bray-Cirtis dissimilarity) calculation
+braydist<-vegdist(t(counttab3),method = "bray")
+brayfit<-cmdscale(braydist,eig=TRUE, k=2)
+eig <- brayfit$eig
+
+brayxy<-as.data.frame(brayfit$points)
+colnames(brayxy)<-c('X','Y')
+points <-as.data.frame(cbind(brayxy, groupinfo3))
+
+
+#### A colorblind-friendly palette for ggplot ####
+# The palette with grey:
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+# The palette with black:
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+# To use for fills, add scale_fill_manual(values=cbPalette)
+# To use for line and point colors, add scale_colour_manual(values=cbPalette)
+
+
+#### plot PCoA (Bray-Curtis) with PCoA 1 and PCoA 2 ####
+options(repr.plot.width = 15, repr.plot.height = 10)
+
+Fig6B <- ggplot(points, aes(x=X, y=Y,color=Sample_Type, 
+                   shape=Inoc_Day)) +
+  labs(title="PCoA (Bray-Curtis dissimilarity)") +
+  labs(x=paste("PCoA 1 (", format(100 * eig[1] / sum(eig), digits=4), "%)", sep=""),
+       y=paste("PCoA 2 (", format(100 * eig[2] / sum(eig), digits=4), "%)", sep="")) +
+  geom_point(size=3) +
+  scale_shape_manual(values = c(6, 16, 17)) +
+  scale_colour_manual(values=cbbPalette) +
+  labs(shape="Inoculation day (DAG)", col="Sample type") +
+  theme_bw()
+Fig6B
+##################################################
+
+## perform PERMANOVA
+df_t_counttab3 <- as.data.frame(t(counttab3), rownames = T)
+adonis2(df_t_counttab3  ~ Sample_Type*Inoc_Day, data=groupinfo3, permutations = 10000, method = "bray")
+```
+
+
+#Full Fig6
+```{r}
+options(repr.plot.width = 15, repr.plot.height = 10)
+
+## Figure 6A
+Fig6A <- ggplot(groupinfo3, aes(x=selectedgrp, y=Shannon)) + 
+  geom_boxplot()+
+  geom_point() +
+  ylim(0,3)+
+  
+  #add the ANOVA results to the plot
+  stat_compare_means(method = "anova", size=6, label.x = 1.5, label.y = 2.7) +
+
+  #add the Post hoc results to the plot, the letter shall appear at position mean+SD+0.5
+  geom_text(data = generate_label_df(tHSD, 'lev'), 
+            aes(x = plot.labels, y = V1, label = labels), size=6) +
+  
+  labs(y =expression("Shannon diversity index")) +
+  scale_x_discrete(labels=c('0', '3', '8', '0', '3', '8', '0', '3', '8')) +
+  xlab(expression(atop("__________    __________    __________", 
+       paste("sand            rhizosphere           root")))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1))
+
+
+Fig6 <- Fig6A/Fig6B 
+Fig6 + plot_annotation(tag_levels = 'A') + plot_layout(heights = c(3, 3))
+
+ggsave(filename = "Fig6.tiff", width = 6, height = 6, units = "in", device='tiff', dpi=300)
+```
+
+
+# DESeq2 between rhizosphere vs sand (1st comparison)
+```{r}
+## separate the Species name
+species <- counttab[["Species"]]
+species <- as.data.frame(species)
+species <- separate(species, species, into = c("SynCom","bacteria", "sp", "strain"),sep = "_", remove = FALSE, extra = "merge")
+species$bacname <- paste(species$bacteria, species$strain)
+
+#---------------------------------------------
+# Step1: Select rhizosphere and sand data for DESeq2
+groupinfo3$ComboInd <- rownames(groupinfo3)
+noroot <- subset(groupinfo3, Sample_Type != "root")
+
+## this block subset the read counts from the selected groups
+checkvals<-(noroot$ComboInd)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset <- append(subset, rownames(noroot)[cs])}
+selcols <- which(colnames(counttab3) %in% noroot$ComboInd)
+counttab_noroot <- counttab3[,..selcols]
+rownames(counttab_noroot) <- rownames(counttab3)
+
+## Check whether count table matches group info
+all(colnames(counttab_noroot) == rownames(noroot))
+
+## give rownames to noroot
+row.names(noroot) <- noroot$ComboInd
+
+## set `sand` as reference level
+noroot$Sample_Type <- as.factor(noroot$Sample_Type)
+noroot$Sample_Type <- relevel(noroot$Sample_Type, ref = "sand")
+
+## calculate DESeq2
+mat_noroot <- as.matrix(counttab_noroot, rownames = species$bacname)
+dds_noroot <- DESeqDataSetFromMatrix(countData = mat_noroot, colData = noroot, design = ~Sample_Type)
+dds_noroot$Sample_Type <- factor(dds_noroot$Sample_Type)
+dds_noroot <- DESeq(dds_noroot)
+resultsNames(dds_noroot)
+
+# Pull out DESeq2 data
+alpha = 0.05
+res1 = results(dds_noroot, name = "Sample_Type_rhizosphere_vs_sand", alpha=alpha)
+res1_all = res1[order(res1$padj), ]
+res1 = res1[order(res1$padj, na.last=NA), ]
+res_sig1 = res1[(res1$padj < alpha), ]
+res_sig1
+
+
+#---------------------------------------------
+# Step2: Select root and sand data for DESeq2
+groupinfo3$ComboInd <- rownames(groupinfo3)
+colData2 <- subset(groupinfo3, Sample_Type != "rhizosphere")
+
+## this block subset the read counts from the selected groups
+checkvals<-(colData2$ComboInd)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset <- append(subset, rownames(colData2)[cs])}
+selcols <- which(colnames(counttab3) %in% colData2$ComboInd)
+countData2 <- counttab3[,..selcols]
+rownames(countData2) <- rownames(counttab3)
+
+## Check whether count table matches group info
+all(colnames(countData2) == rownames(colData2))
+
+## give rownames to colData2
+row.names(colData2) <- colData2$ComboInd
+
+# set `sand` as reference level
+colData2$Sample_Type <- as.factor(colData2$Sample_Type)
+colData2$Sample_Type <- relevel(colData2$Sample_Type, ref = "sand")
+
+## calculate DESeq2
+mat2 <- as.matrix(countData2, rownames = species$bacname)
+dds2 <- DESeqDataSetFromMatrix(countData = mat2, colData = colData2, design = ~Sample_Type)
+dds2$Sample_Type <- factor(dds2$Sample_Type)
+dds2 <- DESeq(dds2)
+resultsNames(dds2)
+
+# Pull out DESeq2 data
+res2 = results(dds2, name = "Sample_Type_root_vs_sand", alpha = 0.05)
+res2_all = res2[order(res2$padj), ]
+res2 = res2[order(res2$padj, na.last=NA), ]
+alpha = 0.05
+res_sig2 = res2[(res2$padj < alpha), ]
+res_sig2
+
+
+#---------------------------------------------
+# Step3: Select sand and sand data for DESeq2
+groupinfo3$ComboInd <- rownames(groupinfo3)
+nosand <- subset(groupinfo3, Sample_Type != "sand")
+
+## this block subset the read counts from the selected groups
+checkvals<-(nosand$ComboInd)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset <- append(subset, rownames(nosand)[cs])}
+selcols <- which(colnames(counttab3) %in% nosand$ComboInd)
+counttab_nosand <- counttab3[,..selcols]
+rownames(counttab_nosand) <- rownames(counttab3)
+
+## Check whether count table matches group info
+all(colnames(counttab_nosand) == rownames(nosand))
+
+## give rownames to nosand
+row.names(nosand) <- nosand$ComboInd
+
+# set `rhizosphere` as reference level
+nosand$Sample_Type <- as.factor(nosand$Sample_Type)
+nosand$Sample_Type <- relevel(nosand$Sample_Type, ref = "rhizosphere")
+
+## calculate DESeq2
+mat_nosand <- as.matrix(counttab_nosand, rownames = species$bacname)
+dds_nosand <- DESeqDataSetFromMatrix(countData = mat_nosand, colData = nosand, design = ~Sample_Type)
+dds_nosand$Sample_Type <- factor(dds_nosand$Sample_Type)
+dds_nosand <- DESeq(dds_nosand)
+resultsNames(dds_nosand)
+
+
+# Pull out DESeq2 data
+alpha = 0.05
+res3 = results(dds_nosand, name = "Sample_Type_root_vs_rhizosphere", alpha=alpha)
+res3_all = res3[order(res3$padj), ]
+res3 = res3[order(res3$padj, na.last=NA), ]
+res_sig3 = res3[(res3$padj < alpha), ]
+res_sig3
+```
+
+
+# Fig7, Sig. diff. DESeq2 results
+```{r}
+# Visualizing the data
+res_sig1 <- as.data.frame(res_sig1)
+res_sig2 <- as.data.frame(res_sig2)
+res_sig3 <- as.data.frame(res_sig3)
+
+
+Fig7A <- ggplot(res_sig1, aes(x=rownames(res_sig1), y=log2FoldChange))+ 
+  geom_point(shape=21, stroke=1, aes(size=baseMean, fill = cut(padj, c(-Inf, 0.05, Inf)))) + 
+  scale_fill_manual(name = "padj",values = c("(-Inf,0.05]" = "black","(0.05, Inf]" = "white")) +
+  geom_hline(yintercept=0)+
+  scale_size(guide=FALSE)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, size=10))+
+  theme(axis.title.y = element_text(size=10))+
+  theme(legend.position="none")+
+  geom_hline(yintercept=0)+
+  ylab(expression(log[2]~fold~change))+
+  theme(legend.text = element_text(face="italic"),
+        axis.title.x = element_blank()) +
+  labs(title=bquote("rhizosphere vs sand"))
+
+
+Fig7B <- ggplot(res_sig3, aes(x=rownames(res_sig3), y=log2FoldChange))+ 
+  ylim(-7, 1) +
+  geom_point(shape=21, stroke=1, aes(size=baseMean, fill = cut(padj, c(-Inf, 0.05, Inf)))) + 
+  scale_fill_manual(name = "padj",values = c("(-Inf,0.05]" = "black","(0.05, Inf]" = "white")) +
+  geom_hline(yintercept=0)+
+  scale_size(guide=FALSE)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, size=10))+
+  theme(axis.title.y = element_text(size=10))+
+  theme(legend.position="none")+
+  geom_hline(yintercept=0)+
+  ylab(expression(log[2]~fold~change))+
+  theme(legend.text = element_text(face="italic"),
+        axis.title.x = element_blank()) +
+ labs(title=bquote("root vs rhizosphere"))
+
+Fig7 <- Fig7A + Fig7B 
+Fig7 + plot_annotation(tag_levels = 'A') + plot_layout(widths = c(5, 3))
+ggsave(filename = "Fig7.tiff", width = 6.5, height = 3, units = "in", device='tiff', dpi=300)
+```
+
+
+# Fig8, Calculate_reproducibility among replicates based on Sample_Type
+```{r}
+# Load 16S read count table
+logrelabuntab<-fread("Syn_logRelCount.csv")
+logrelabuntab2<-logrelabuntab[,2:ncol(logrelabuntab)]
+rownames(logrelabuntab2)<-logrelabuntab$Species
+braydist<-vegdist(t(logrelabuntab2),method = "bray")
+braydist2 <- data.frame(as.matrix(braydist))
+points <-as.data.frame(cbind(braydist2, groupinfo2))
+
+## Check whether the name is correctly aligned
+all(rownames(points) == rownames(groupinfo2)) 
+
+# extract the numeric data
+df <- read_xlsx("SynBrayDist.xlsx")
+df_element <- df[, 2:171] 
+colnames(df_element) <- NULL
+df_element2 <- matrix(unlist(t(df_element)), byrow = FALSE, ncol = 1) %>% as.data.frame()
+df_name <- df %>% dplyr::select(G4)
+
+# Combine data with name
+df_name <- do.call("rbind", replicate(n = nrow(df_element) / nrow(df_name), df_name, simplify = FALSE))
+df_name2 <- rep(df$G4, each=170)
+
+# Delete repetitive data
+df_all <- cbind(df_name, df_name2, df_element2) %>% filter(G4 == df_name2) %>% distinct(V1, .keep_all = TRUE) %>% filter(V1 != 0)
+df_all <-data.frame(df_all)
+colnames(df_all) <-c("G4", "group", "braydist")
+
+
+# Use for loop to plot reproducibility according to sample type
+## Set the organ appealing group in the plot
+df_all$group <- gsub("unattached sand", "sand", df_all$group)
+df_all$group <- gsub("Attached sand", "rhizosphere", df_all$group)
+df_all$group <- gsub("Root", "root", df_all$group)
+
+## Set sample type
+type <- c("sand", "rhizosphere", "root")
+'%notlike%' <- Negate('%like%')
+mylist <- list()
+
+for (sample_type in type) {
+  df_subset <-subset(df_all, 
+                     group %like% 21 & 
+                     group %like% sample_type &
+                     group %notlike% 'None' &
+                     group %notlike% 'No' &
+                     group %notlike% '8S')
+
+## Perform ANOVA & Multiple comparison for plotting
+d <- data.frame(lev=df_subset$group, y=df_subset$braydist)
+a <- aov(y~lev, data=d)
+tHSD <- TukeyHSD(a, ordered = FALSE, conf.level = 0.95)
+  
+generate_label_df <- function(HSD, flev){
+    Tukey.levels <- HSD[[flev]][,4]
+    Tukey.labels <- multcompLetters(Tukey.levels)['Letters']
+    plot.labels <- names(Tukey.labels[['Letters']])
+    boxplot.df <- ddply(d, flev, function (x) max(fivenum(x$y)) + 0.4)
+    plot.levels <- data.frame(plot.labels, labels = Tukey.labels[['Letters']], stringsAsFactors = FALSE)
+    labels.df <- merge(plot.levels, boxplot.df, by.x = 'plot.labels', by.y = flev, sort = FALSE)
+    return(labels.df)
+}
+
+## Calculate the mean and SD of each condition/treatment pair for plotting the bar plot
+agg=aggregate(y~lev, data=d, FUN="mean")
+agg$sd=aggregate(y~lev, data=d, FUN="sd")$value
+library(ggplot2)
+dodge <- position_dodge(width=0.9) 
+limits <- aes(ymax=value+sd, ymin=value-sd)
+  
+#set  x, y value for ANOVA & multiple comparison
+d <- data.frame(lev=df_subset$group, y=df_subset$braydist)
+  
+
+## Fig8
+draw_data <- ggplot(d, aes(x=lev, y=y)) + 
+    geom_boxplot()+
+    geom_point() +
+    ylim(0, 0.55) +
+    #add the ANOVA results to the plot
+    stat_compare_means(method = "anova", size=3.5, label.x = 1, label.y = 0.5) +
+    #add the Post hoc results to the plot, the letter shall appear at position mean+SD+0.5
+    geom_text(data = generate_label_df(tHSD, 'lev'), 
+              aes(x = plot.labels, y = V1-0.3, label = labels), size=6) +
+    #setup texts font, size, angle in the graph
+    theme_bw() +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(title = element_text(face = "bold", size = 8))+ #set title format
+    theme(axis.text.x = element_text(face = "bold", color="black", size = 8),
+          axis.text.y = element_text(face = "bold", color="black", size = 8),
+          plot.margin = unit(c(0.2, 0.2, 0.3, 0.3), "inches")) + #set x, y axis format, and plot margin
+    scale_x_discrete(labels=c("0", "3", "8")) +
+    labs(title = paste(sample_type),
+         x =expression(" "), 
+         y =expression(bold("Euclidean distances among replicates")))
+mylist[[sample_type]] <- draw_data
+}
+
+myplot <- patchwork::wrap_plots(mylist, nrow=1) + patchwork::plot_annotation(tag_levels = 'A')
+myplot
+ggsave(filename = "Fig8.tiff", myplot, width = 6.5, height = 3, units = "in", device='tiff', dpi=300)
+```

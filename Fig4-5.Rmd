@@ -1,0 +1,474 @@
+---
+title: "Fig4 and Fig5_14 DAG"
+output: html_document
+---
+
+############################################################################################################
+# Impact of inoculation practices on microbiota assembly and community stability in a fabricated ecosystem #
+############################################################################################################
+
+#clears current global environment if necessary
+```{r}
+rm(list = ls())
+```
+
+
+# Load all packages needed
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(vegan)
+library(data.table)
+library(ggplot2)
+library(MASS)
+library(plyr)
+library(multcompView)
+library(ggpubr)
+library(DESeq2)
+library(rcompanion)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+```
+
+
+# Load and select 14 DAG data
+```{r}
+## load 16S read count table
+counttab<-fread("SynCount.csv")
+counttab2<-counttab[,2:ncol(counttab)]
+rownames(counttab2)<-counttab$Species
+
+## load biodiversity table
+groupdiversity<-fread("Sample_Info.csv")
+groupinfo2<-groupdiversity
+groupinfo2<-as.data.frame(groupinfo2)
+rownames(groupinfo2)<-groupinfo2$ComboInd
+## Check whether count table matches group info
+all(colnames(counttab2) == rownames(groupinfo2))
+
+
+# select 14 DAG samples
+groupinfo3 <-subset(groupinfo2, 
+                    Inoculated == "Yes" & 
+                      Harvest_Day =="14" &
+                      Plant == "Brachypodium")
+rownames(groupinfo3) <-groupinfo3$ComboInd
+
+
+## this block subset the read counts from the selected groups
+checkvals<-(groupinfo3$ComboInd1)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset<-append(subset,rownames(groupinfo3)[cs])}
+selcols <- which(colnames(counttab2) %in% groupinfo3$ComboInd1)
+counttab3<-counttab2[,..selcols] #[,rownames(groupinfo2)]
+rownames(counttab3)<-rownames(counttab2)
+## Check whether count table matches group info
+all(colnames(counttab3) == rownames(groupinfo3))
+```
+
+# Calculate Shannin, Simpson, Richness, and Eveness
+```{r}
+selectedgrp = groupinfo3$G4
+
+alpha <- with(groupinfo3, tapply(specnumber(t(counttab3)), selectedgrp, mean))
+gamma <- with(groupinfo3, specnumber(t(counttab3), selectedgrp))
+beta<-gamma/alpha-1
+
+shannon<-diversity(t(counttab3))
+simps<-diversity(t(counttab3),"simpson")
+invsimps<-diversity(t(counttab3),"inv")
+rich<-specnumber(t(counttab3))
+even<-shannon/log(rich)
+
+groupinfo3$Shannon<-shannon
+groupinfo3$Simpson<-simps
+groupinfo3$InvSimpson<-invsimps
+groupinfo3$Richness<-rich
+groupinfo3$Evenness<-even
+groupinfo3 <- groupinfo3[c("Sample_Type", "Inoc_Day", "Shannon", "Simpson", "InvSimpson", "Richness", "Evenness")]
+```
+
+#set the organ appealing group in the plot
+```{r}
+groupinfo3$Sample_Type <- gsub("unattached sand", "sand", groupinfo3$Sample_Type)
+groupinfo3$Sample_Type <- gsub("Attached sand", "rhizosphere", groupinfo3$Sample_Type)
+groupinfo3$Sample_Type <- gsub("Root", "root", groupinfo3$Sample_Type)
+
+groupinfo3$G4 <- paste(groupinfo3$Sample_Type, "_", groupinfo3$Inoc_Day)
+groupinfo3$G4 <- factor(groupinfo3$G4, levels = c("sand _ 0",
+                                                  "sand _ 3",
+                                                  "sand _ 8",
+                                                  "rhizosphere _ 0",
+                                                  "rhizosphere _ 3",
+                                                  "rhizosphere _ 8",
+                                                  "root _ 0",
+                                                  "root _ 3",
+                                                  "root _ 8"))
+
+
+## define groups from selected data
+selectedgrp=groupinfo3$G4
+```
+
+
+# Fig4A, Calculate and plot alpha diversity
+```{r}
+## set  x, y value for ANOVA & multiple comparison
+selected.Shannon <- data.frame(groupinfo3, lev=selectedgrp, y=groupinfo3$Shannon)
+
+## this block perform ANOVA & Multiple comparison for plotting
+################################################
+a <- aov(y~lev, data=selected.Shannon) # perform ANOVA
+tHSD <- TukeyHSD(a, ordered = FALSE, conf.level = 0.95) #perform post-hoc
+
+generate_label_df <- function(HSD, flev){
+  # Extract labels and factor levels from Tukey post-hoc 
+  Tukey.levels <- HSD[[flev]][,4]
+  Tukey.labels <- multcompLetters(Tukey.levels)['Letters']
+  plot.labels <- names(Tukey.labels[['Letters']])
+  
+  # Get highest quantile for Tukey's 5 number summary and add a bit of space to buffer between    
+  # upper quantile and label placement
+  boxplot.df <- ddply(selected.Shannon, flev, function (x) max(fivenum(x$y)) + 0.4)
+  
+  # Create a data frame out of the factor levels and Tukey's homogenous group letters
+  plot.levels <- data.frame(plot.labels, labels = Tukey.labels[['Letters']],
+                            stringsAsFactors = FALSE)
+  
+  # Merge it with the labels
+  labels.df <- merge(plot.levels, boxplot.df, by.x = 'plot.labels', by.y = flev, sort = FALSE)
+  
+  return(labels.df)
+}
+################################################
+
+## This block Calculate the mean and SD of each condition/treatment pair for plotting the bar plot
+################################################
+agg=aggregate(groupinfo3$Shannon~selectedgrp, data=selected.Shannon, FUN="mean") #mean
+agg$sd=aggregate(groupinfo3$Shannon~selectedgrp, data=selected.Shannon, FUN="sd")$value #add the SD 
+library(ggplot2)
+library(ggpubr)
+dodge <- position_dodge(width=0.9) 
+limits <- aes(ymax=groupinfo3$Shannon+sd, ymin=groupinfo3$Shannon-sd) #Set up the error bars
+################################################
+options(repr.plot.width = 15, repr.plot.height = 10)
+
+## Figure 4A
+Fig4A <- ggplot(groupinfo3, aes(x=selectedgrp, y=Shannon)) + 
+  geom_boxplot()+
+  geom_point() +
+  ylim(0,2.5)+
+  
+  #add the ANOVA results to the plot
+  #stat_compare_means(method = "anova", size=6, label.x = 1.5, label.y = 2.3) +
+
+  #add the Post hoc results to the plot, the letter shall appear at position mean+SD+0.5
+  geom_text(data = generate_label_df(tHSD, 'lev'), 
+            aes(x = plot.labels, y = V1, label = labels), size=6) +
+  
+  #labs(title="14 DAG plant Shannon") +
+  labs(y =expression("Shannon diversity index")) +
+  scale_x_discrete(labels=c('0', '3', '8', '0', '3', '8', '0', '3', '8')) +
+  xlab(expression(atop("_____________________          _____________________         _____________________", 
+       paste("sand                                    rhizosphere                                     root")))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1))
+Fig4A
+
+ggsave(filename = "Fig4A.tiff", width = 6.5, height = 3, units = "in", device='tiff', dpi=300)
+```
+
+
+# Fig4B, Calculate and plot Beta Diversity
+```{r}
+#### PCoA (Bray-Cirtis dissimilarity) calculation
+braydist<-vegdist(t(counttab3),method = "bray")
+brayfit<-cmdscale(braydist,eig=TRUE, k=2)
+eig <- brayfit$eig
+
+brayxy<-as.data.frame(brayfit$points)
+colnames(brayxy)<-c('X','Y')
+points <-as.data.frame(cbind(brayxy, groupinfo3))
+
+
+#### A colorblind-friendly palette for ggplot ####
+# The palette with grey:
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+# The palette with black:
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+# To use for fills, add scale_fill_manual(values=cbPalette)
+# To use for line and point colors, add scale_colour_manual(values=cbPalette)
+
+
+#### Fig4B
+options(repr.plot.width = 15, repr.plot.height = 10)
+
+Fig4B <- ggplot(points, aes(x=X, y=Y,color=Sample_Type, 
+                   shape=Inoc_Day)) +
+  labs(title="PCoA (Bray-Curtis dissimilarity)") +
+  labs(x=paste("PCoA 1 (", format(100 * eig[1] / sum(eig), digits=4), "%)", sep=""),
+       y=paste("PCoA 2 (", format(100 * eig[2] / sum(eig), digits=4), "%)", sep="")) +
+  geom_point(size=3) +
+  scale_shape_manual(values = c(16, 17, 15, 3)) +
+  scale_colour_manual(values=cbbPalette) +
+  labs(shape="Inoculation Day (DAG)", col="Sample type") +
+  theme_bw()+ theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1))
+
+Fig4B
+ggsave(filename = "Fig4B.tiff", width = 6.5, height = 3, units = "in", device='tiff', dpi=300)
+##################################################
+
+
+# perform PERMANOVA for all 14 DAG samples
+df_t_counttab3 <- as.data.frame(t(counttab3), rownames = T)
+adonis2(df_t_counttab3  ~ groupinfo3$G4, data = groupinfo3, permutations = 9999, method = "bray")
+
+adosin2_sample_type <- adonis2(df_t_counttab3  ~ groupinfo3$Sample_Type, data=groupinfo3, permutations = 9999, method = "bray")
+adosin2_inoc_day <-adonis2(df_t_counttab3  ~ groupinfo3$Inoc_Day, data=groupinfo3, permutations = 9999, method = "bray")
+adosin2_sample_type__inoc_day <-adonis2(df_t_counttab3  ~ groupinfo3$Sample_Type*groupinfo3$Inoc_Day, data=groupinfo3, permutations = 10000, method = "bray")
+
+adosin2_sample_type 
+adosin2_inoc_day 
+adosin2_sample_type__inoc_day 
+
+```
+
+
+#Full Fig4
+```{r}
+options(repr.plot.width = 15, repr.plot.height = 10)
+
+## Figure 4A
+Fig4A <- ggplot(groupinfo3, aes(x=selectedgrp, y=Shannon)) + 
+  geom_boxplot()+
+  geom_point() +
+  ylim(0,2.5)+
+  
+  #add the ANOVA results to the plot
+  #stat_compare_means(method = "anova", size=6, label.x = 1.5, label.y = 2.7) +
+
+  #add the Post hoc results to the plot, the letter shall appear at position mean+SD+0.5
+  geom_text(data = generate_label_df(tHSD, 'lev'), 
+            aes(x = plot.labels, y = V1, label = labels), size=6) +
+  
+  #labs(title="14 DAG plant Shannon") +
+  labs(y =expression("Shannon diversity index")) +
+  scale_x_discrete(labels=c('0', '3', '8', '0', '3', '8', '0', '3', '8')) +
+  xlab(expression(atop("__________    __________    __________", 
+       paste("sand            rhizosphere           root")))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1))
+
+
+Fig4 <- Fig4A/Fig4B 
+Fig4 + plot_annotation(tag_levels = 'A') + plot_layout(heights = c(3, 3))
+
+ggsave(filename = "Fig4.tiff", width = 6, height = 6, units = "in", device='tiff', dpi=300)
+```
+
+
+# PERMANOVA on soil, rhizosphere, and root
+```{r}
+#prepare the sample ID
+groupinfo3$ComboInd <- rownames(groupinfo3)
+
+# PERMANOVA on sand samples
+## select 14 DAG_sand samples
+sandinfo <-subset(groupinfo3, Sample_Type == "sand", drop = FALSE)
+rownames(sandinfo) <-sandinfo$ComboInd
+## subset the read counts from counttab3
+checkvals<-(sandinfo$Sample_Type)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset<-append(subset,rownames(sandinfo)[cs])}
+selcols <- which(colnames(counttab3) %in% sandinfo$ComboInd)   ###### this doesn't work
+sandcounttab <- counttab3[,..selcols]
+rownames(sandcounttab) <- rownames(sandcounttab)
+
+## Check whether count table matches group info
+all(colnames(sandcounttab) == rownames(sandinfo))
+
+df_t_sandcounttab <- as.data.frame(t(sandcounttab), rownames = T) #transverse counttab3 and assigned it with species name
+adosin2_sand <- adonis2(df_t_sandcounttab  ~ sandinfo$Inoc_Day, data=sandinfo, permutations = 9999, method = "bray")
+
+
+# PERMANOVA on rhizosphere samples
+## select 14 DAG_rhizosphere samples
+rhizosphereinfo <-subset(groupinfo3, Sample_Type == "rhizosphere", drop = FALSE)
+rownames(rhizosphereinfo) <-rhizosphereinfo$ComboInd
+## subset the read counts from counttab3
+checkvals<-(rhizosphereinfo$Sample_Type)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset<-append(subset,rownames(rhizosphereinfo)[cs])}
+selcols <- which(colnames(counttab3) %in% rhizosphereinfo$ComboInd)   ###### this doesn't work
+rhizospherecounttab <- counttab3[,..selcols]
+rownames(rhizospherecounttab) <- rownames(rhizospherecounttab)
+
+## Check whether count table matches group info
+all(colnames(rhizospherecounttab) == rownames(rhizosphereinfo))
+
+df_t_rhizospherecounttab <- as.data.frame(t(rhizospherecounttab), rownames = T) #transverse counttab3 and assigned it with species name
+adosin2_rhizosphere <- adonis2(df_t_rhizospherecounttab  ~ rhizosphereinfo$Inoc_Day, data=rhizosphereinfo, permutations = 9999, method = "bray")
+
+
+# PERMANOVA on root samples
+## select 14 DAG_root samples
+rootinfo <-subset(groupinfo3, Sample_Type == "root", drop = FALSE)
+rownames(rootinfo) <-rootinfo$ComboInd
+## subset the read counts from counttab3
+checkvals<-(rootinfo$Sample_Type)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset<-append(subset,rownames(rootinfo)[cs])}
+selcols <- which(colnames(counttab3) %in% rootinfo$ComboInd)   ###### this doesn't work
+rootcounttab <- counttab3[,..selcols]
+rownames(rootcounttab) <- rownames(rootcounttab)
+
+## Check whether count table matches group info
+all(colnames(rootcounttab) == rownames(rootinfo))
+
+df_t_rootcounttab <- as.data.frame(t(rootcounttab), rownames = T) #transverse counttab3 and assigned it with species name
+adosin2_root <- adonis2(df_t_rootcounttab  ~ rootinfo$Inoc_Day, data=rootinfo, permutations = 9999, method = "bray")
+
+
+adosin2_sand
+adosin2_rhizosphere
+adosin2_root
+```
+
+
+# Fig5, DESeq on rhizosphere samples 
+```{r}
+# select rhizosphere data
+groupinfo3$ComboInd <- rownames(groupinfo3)
+groupinfo4 <- subset(groupinfo3, Sample_Type == "rhizosphere")
+
+## this block subset the read counts from the selected groups
+checkvals<-(groupinfo4$ComboInd)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset <- append(subset, rownames(groupinfo4)[cs])}
+selcols <- which(colnames(counttab3) %in% groupinfo4$ComboInd)
+counttab4 <- counttab3[,..selcols]
+rownames(counttab4) <- rownames(counttab3)
+
+## Check whether count table matches group info
+all(colnames(counttab4) == rownames(groupinfo4))
+
+#---------------------------------------------
+# Calculate DESeq2 on 14 DAG rhizosphere data
+## separate the Species name
+species <- counttab[["Species"]]
+species <- as.data.frame(species)
+species <- separate(species, species, into = c("SynCom","bacteria", "sp", "strain"),sep = "_", remove = FALSE, extra = "merge")
+species$bacname <- paste(species$bacteria, species$strain)
+
+## give rownames to groupinfo4
+row.names(groupinfo4) <- groupinfo4$ComboInd
+
+## set `Bd21-3` as reference level
+groupinfo4$Inoc_Day <- as.factor(groupinfo4$Inoc_Day)
+groupinfo4$Inoc_Day <- relevel(groupinfo4$Inoc_Day, ref = "0")
+
+## calculate DESeq2
+mat_14DAG <- as.matrix(counttab4, rownames = species$bacname)
+dds_14DAG <- DESeqDataSetFromMatrix(countData = mat_14DAG, colData = groupinfo4, design = ~Inoc_Day)
+dds_14DAG$Inoc_Day <- factor(dds_14DAG$Inoc_Day)
+dds_14DAG <- DESeq(dds_14DAG)
+
+# Pull out DESeq2 data
+alpha = 0.05
+
+res1 = results(dds_14DAG, contrast=c("Inoc_Day", "3", "0"), alpha=alpha)
+res1 = res1[order(res1$padj, na.last=NA), ]
+res1$Inoc_Day <- list(rep("1"))
+res_sig1 = res1[(res1$padj < alpha), ]
+res_sig1
+
+res2 = results(dds_14DAG, contrast=c("Inoc_Day", "8", "0"), alpha=alpha)
+res2 = res2[order(res2$padj, na.last=NA), ]
+res2$Inoc_Day <- list(rep("2"))
+res_sig2 = res2[(res2$padj < alpha), ]
+res_sig2
+
+#---------------------------------------------
+## set `Bd21-3` as reference level
+groupinfo4$Inoc_Day <- as.factor(groupinfo4$Inoc_Day)
+groupinfo4$Inoc_Day <- relevel(groupinfo4$Inoc_Day, ref = "3")
+
+## calculate DESeq2
+mat_14DAG2 <- as.matrix(counttab4, rownames = species$bacname)
+dds_14DAG2 <- DESeqDataSetFromMatrix(countData = mat_14DAG2, colData = groupinfo4, design = ~Inoc_Day)
+dds_14DAG2$Inoc_Day <- factor(dds_14DAG2$Inoc_Day)
+dds_14DAG2 <- DESeq(dds_14DAG2)
+
+
+res3 = results(dds_14DAG2, contrast=c("Inoc_Day", "8", "3"), alpha=alpha)
+res3 = res3[order(res3$padj, na.last=NA), ]
+res3$Inoc_Day <- list(rep("3"))
+res_sig3 = res3[(res3$padj < alpha), ]
+res_sig3
+
+#---------------------------------------------
+res1 <- as.data.frame(res1)
+res2 <- as.data.frame(res2)
+res3 <- as.data.frame(res3)
+
+#---------------------------------------------
+#### Fig5
+Fig5A <- ggplot(res1, aes(x=rownames(res1), y=log2FoldChange))+ 
+  geom_point(shape=21, stroke=1, aes(size=baseMean, fill = cut(padj, c(-Inf, 0.05, Inf)))) + 
+  scale_fill_manual(name = "padj",values = c("(-Inf,0.05]" = "black","(0.05, Inf]" = "white")) +
+  geom_hline(yintercept=0)+
+  scale_size(guide=FALSE)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, size=10))+
+  theme(axis.title.y = element_text(size=10))+
+  theme(legend.position="none")+
+  theme(axis.text.x = element_blank(),
+        legend.text = element_text(face="italic"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  ) +
+  labs(title=bquote(bold("A")~"3 DAG vs 0 DAG"))
+
+Fig5B <- ggplot(res2, aes(x=rownames(res2), y=log2FoldChange))+ 
+  geom_point(shape=21, stroke=1, aes(size=baseMean, fill = cut(padj, c(-Inf, 0.05, Inf)))) + 
+  scale_fill_manual(name = "padj",values = c("(-Inf,0.05]" = "black","(0.05, Inf]" = "white")) +
+  geom_hline(yintercept=0)+
+  scale_size(guide=FALSE)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, size=10))+
+  theme(axis.title.y = element_text(size=10))+
+  theme(legend.position="none")+
+  geom_hline(yintercept=0)+
+  ylab(expression(log[2]~fold~change))+
+  theme(axis.text.x = element_blank(),
+        legend.text = element_text(face="italic"),
+        axis.title.x = element_blank()) +
+  labs(title=bquote(bold("B")~"8 DAG vs 0 DAG"))
+
+Fig5C <- ggplot(res3, aes(x=rownames(res3), y=log2FoldChange))+ 
+  geom_point(shape=21, stroke=1, aes(size=baseMean, fill = cut(padj, c(-Inf, 0.05, Inf)))) + 
+  scale_fill_manual(name = "padj",values = c("(-Inf,0.05]" = "black","(0.05, Inf]" = "white")) +
+  geom_hline(yintercept=0)+
+  scale_size(guide=FALSE)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=45, hjust=1, size=10))+
+  theme(axis.title.y = element_text(size=10))+
+  theme(legend.position="none")+
+  theme(axis.text.x = element_text(face="italic"),
+        legend.text = element_text(face="italic"),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  ) +
+  labs(title=bquote(bold("C")~"8 DAG vs 3 DAG"))
+
+
+Fig5 <- Fig5A/Fig5B/Fig5C
+Fig5
+ggsave(filename = "Fig5.tiff", width = 3.25, height = 6, units = "in", device='tiff', dpi=300)
+```

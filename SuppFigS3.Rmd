@@ -1,0 +1,104 @@
+---
+title: "14DAG_plant_biomass"
+author: "Hsiao-Han Lin"
+date: "2023-03-30"
+output: html_document
+---
+
+# Clean the environment
+```{r}
+rm(list=ls())
+```
+
+
+# Load the packages needed
+```{r setup, include=FALSE}
+## set working directory
+setwd("C:/Users/hsiaohanlin/Documents/Set3/16S counts and code")
+
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(patchwork)
+library(plyr)
+library(multcompView)
+library(ggpubr)
+library(Hmisc)
+library(devtools)
+library(agricolae)
+```
+
+
+# Select data
+```{r}
+biomass<-read.csv("14dag_data.csv",head=T)
+
+#set the organ appealing group in the plot
+biomass$organ <- factor(biomass$organ, levels=c("shoot","root"))
+
+#set the age appealing group in the plot
+biomass$age <- factor(biomass$age,levels=c("zero","three", "eight"))
+ggplot.x.axis.1a<-c("zero"= expression(bold("0")),
+                    "three"= expression(bold("3")),
+                    "eight"= expression(bold("8"))
+                    )
+head(biomass)
+```
+
+
+# Calculate the mean and SD of each condition/treatment pair
+```{r}
+agg1a=aggregate(value~age*organ, data=biomass, FUN="mean") #mean
+agg1a$sd=aggregate(value~age*organ, data=biomass, FUN="sd")$value #add the SD 
+dodge1a <- position_dodge(width=0.9) 
+limits1a <- aes(ymax=value+sd, ymin=value-sd) #Set up the error bars
+```
+
+
+#ANOVA tests
+```{r}
+print("ANOVA test on shoot fresh weight")
+shootfw <-biomass[ biomass$organ %in% c("shoot"),]
+anova <-aov(shootfw$value~shootfw$age)
+summary(anova)
+cat("\n")
+print("ANOVA test on root fresh weight")
+rootfw <-biomass[ biomass$organ %in% c("root"),]
+anova <-aov(rootfw$value~rootfw$age)
+summary(anova)
+```
+
+
+# Supplement Figure S3
+```{r}
+SuppFig3 <- ggplot(agg1a, aes(fill=organ, y=value, x=age))+
+  ylim(0,70)+
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"))+
+  
+  #draw barplot,error bar, and data points
+  geom_bar(data= agg1a, position=dodge1a, stat="identity", color = "black", fill= "white") +
+  geom_errorbar(data=agg1a, mapping= limits1a, position=dodge1a, width=0.25) +
+  geom_point(data=biomass,aes(age,value,shape=age), position=dodge1a, size=3) +
+  
+  #group the bar by organ
+  facet_wrap(~organ, nrow=1,labeller=label_parsed) +
+  
+  #adjust text in the plot
+  scale_x_discrete(labels=ggplot.x.axis.1a) +
+  scale_fill_discrete(guide=FALSE) +
+  theme(legend.position='none') +
+  labs( x = expression(bold("Inoculation day (DAG)")),
+        y = expression(bold("Fresh weight (mg)"))
+        )+
+  theme(text = element_text(size=16, face = "bold"),
+        plot.margin = unit(c(0.2, 0.2, 0.3, 0.3), "inches"))+
+  theme(axis.text.x = element_text(face = "bold", color="black", size = 14, angle = 0)) +
+  theme(
+    strip.text.x = element_text(size = 16),
+    strip.background = element_rect(color="black", fill="white", size=0.5, linetype="solid")
+    ) +
+  geom_segment(aes(x = 1, y = 58, xend = 3, yend = 58)) +
+  annotate("text", x = 2, y = 62, label = "ns")
+
+SuppFig3
+ggsave(filename = "SuppFig3.tiff", width = 5, height = 3, units = "in", device='tiff', dpi=300)
+```

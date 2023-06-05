@@ -1,0 +1,141 @@
+---
+title: "FIgS7"
+output: html_document
+---
+
+# Clean the environment
+```{r}
+rm(list=ls())
+```
+
+
+# Load the packages needed
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(patchwork)
+library(plyr)
+library(multcompView)
+library(ggpubr)
+library(Hmisc)
+library(devtools)
+library(agricolae)
+library(ggpubr)
+library(rstatix)
+```
+
+# Load data
+```{r}
+data<-read.csv("21dpi_data.csv",head=T)
+
+#set the organ appealing group in the plot
+data$organ <- factor(data$organ, levels=c("shoot","root"))
+
+#set the age appealing group in the plot
+data$age <- factor(data$age, levels=c("zero","three", "eight"))
+
+head(data)
+```
+
+
+# Perform t-test
+```{r}
+# Subset data based on their inoculation date
+########## draw age$zero ##########
+zeroday <-data[ data$age %in% c("zero"),]
+zeroday$organ <- factor(zeroday$organ, levels=c("shoot","root"))
+zeroday$syncom <- factor(zeroday$syncom, levels=c("n","y"))
+ggplot.x.axis.1c<-c("n"= expression(bold("-")), "y"= expression(bolditalic("+")))
+
+########## draw age$three ##########
+threeday <-data[ data$age %in% c("three"),]
+threeday$organ <- factor(threeday$organ, levels=c("shoot","root"))
+threeday$syncom <- factor(threeday$syncom, levels=c("n","y"))
+ggplot.x.axis.1b<-c("n"= expression(bold("-")), "y"= expression(bolditalic("+")))
+
+########## draw age$eight ##########
+eightday <-data[ data$age %in% c("eight"),]
+eightday$organ <- factor(eightday$organ, levels=c("shoot","root"))
+eightday$syncom <- factor(eightday$syncom, levels=c("n","y"))
+ggplot.x.axis.1a<-c("n"= expression(bold("-")), "y"= expression(bolditalic("+")))
+head(eightday)
+
+# Perform t-test
+#### 0DAG shoot fresh weight t-test
+zeroshootfw <-zeroday[zeroday$organ %in% c("shoot"),]
+# perform t-test between +SynCom & -SynCom
+t.test(zeroshootfw$value~zeroshootfw$syncom,
+       paired= FALSE, var.equal = TRUE, conf.level = 0.95)
+
+#### 0DAG root fresh weight t-test
+zerorootfw <-zeroday[zeroday$organ %in% c("root"),]
+# perform t-test between +SynCom & -SynCom
+t.test(zerorootfw$value~zerorootfw$syncom,
+       paired= FALSE, var.equal = TRUE, conf.level = 0.95)
+
+
+#### 3DAG shoot fresh weight t-test
+threeshootfw <-threeday[threeday$organ %in% c("shoot"),]
+# perform t-test between +SynCom & -SynCom
+t.test(threeshootfw$value~threeshootfw$syncom,
+       paired= FALSE, var.equal = TRUE, conf.level = 0.95)
+
+#### 3DAG root fresh weight t-test
+threerootfw <-threeday[threeday$organ %in% c("root"),]
+# perform t-test between +SynCom & -SynCom
+t.test(threerootfw$value~threerootfw$syncom,
+       paired= FALSE, var.equal = TRUE, conf.level = 0.95)
+
+
+#### 8DAG shoot fresh weight t-test
+eightshootfw <-eightday[eightday$organ %in% c("shoot"),]
+# perform t-test between +SynCom & -SynCom
+t.test(eightshootfw$value~eightshootfw$syncom,
+       paired= FALSE, var.equal = TRUE, conf.level = 0.95)
+
+#### 8DAG root fresh weight t-test
+eightrootfw <-eightday[eightday$organ %in% c("root"),]
+# perform t-test between +SynCom & -SynCom
+t.test(eightrootfw$value~eightrootfw$syncom,
+       paired= FALSE, var.equal = TRUE, conf.level = 0.95)
+```
+
+
+# Supp FigS7
+```{r}
+stat.test <- data %>%
+  group_by(age, organ) %>%
+  tukey_hsd(value ~ syncom) 
+stat.test 
+
+# New facet label names for inoculation method
+age.labs <- c("0 DAG", "3 DAG", "8 DAG")
+names(age.labs) <- c("zero", "three", "eight")
+
+# Create bar plots with significance levels
+# Hide ns (non-significant)
+# Add 15% space between labels and the plot top border
+stat.test <- stat.test %>% add_xy_position(x = "syncom", fun = "mean_se")
+
+SuppFigS7 <- ggbarplot(data, x = "syncom", y = "value", 
+                       add = "mean_se", facet = c("organ", "age"), lab.size = 16) +
+  stat_pvalue_manual(stat.test, hide.ns = TRUE, tip.length = 0, step.increase = 0, size = 5) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
+  geom_point(data=data, aes(x = syncom, y = value, shape = syncom), size=3) +
+  facet_grid(organ ~ age, labeller = labeller(age = age.labs) ) +
+
+  scale_fill_discrete(guide=FALSE) +
+  labs(x =expression(bold("SynCom")), y =expression(bold("fresh weight (mg)"))) +
+  theme(legend.position='none') +
+  theme(axis.text.x = element_text(face = "bold", color="black", size = 14, angle = 0),
+        axis.text.y = element_text(face = "bold", color="black", size = 10, angle = 0),
+        strip.background = element_rect(color="black", fill="white", size=0.5, linetype="solid")
+        ) +
+  scale_x_discrete(labels=c("n" = "-", "y" = "+")) +
+  theme(strip.text.x = element_text(size = 16),
+        strip.text.y = element_text(size = 16))
+
+SuppFigS7
+ggsave(filename = "SuppFigS7.png", width = 6, height = 4, units = "in", device='png', dpi=300)
+```
+

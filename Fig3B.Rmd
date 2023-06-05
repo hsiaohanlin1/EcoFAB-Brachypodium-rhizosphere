@@ -1,0 +1,145 @@
+---
+title: "Fig3B"
+output: html_document
+---
+
+#clears current global environment if necessary
+```{r}
+rm(list = ls())
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(vegan)
+library(data.table)
+library(ggplot2)
+library(MASS)
+library(plyr)
+library(multcompView)
+library(ggpubr)
+library(DESeq2)
+library(rcompanion)
+library(dplyr)
+library(tidyr)
+```
+
+
+# Select SynCom samples from liquid and no_plant_sand
+```{r}
+## Load 16S read count table
+counttab<-fread("SynCount.csv")
+counttab2<-counttab[,2:ncol(counttab)]
+rownames(counttab2)<-counttab$Species
+
+## Load biodiversity table
+groupdiversity<-fread("Sample_Info.csv")
+groupinfo2<-groupdiversity
+groupinfo2<-as.data.frame(groupinfo2)
+rownames(groupinfo2)<-groupinfo2$ComboInd
+
+### check if Sample_ID is a perfect match
+all(colnames(counttab2) == rownames(groupinfo2))
+
+# Subset the data
+groupinfo3 <-subset(groupinfo2, Inoculated == "Yes" & 
+                      G4 =="SynCom mix_liquid_None_Yes_0_0_0" |
+                      G4 == "unattached sand_EcoFAB_None_Yes_0_0_0" | #"|" means "or"
+                      G4 == "unattached sand_EcoFAB_None_Yes_8_14_6" |
+                      G4 == "unattached sand_EcoFAB_None_Yes_3_14_11" |
+                      G4 == "unattached sand_EcoFAB_None_Yes_0_14_14" |
+                      G4 == "unattached sand_EcoFAB_None_Yes_0_21_21"
+                    )
+rownames(groupinfo3) <-groupinfo3$ComboInd
+
+### this block subset the read counts from the selected groups
+### the information will be used for PCoA plotting
+checkvals<-(groupinfo3$ComboInd1)
+subset<-list()
+countset<-1:length(checkvals)
+for (cs in countset){subset<-append(subset,rownames(groupinfo3)[cs])}
+selcols <- which(colnames(counttab2) %in% groupinfo3$ComboInd1)
+counttab3 <- counttab2[,..selcols] #[,rownames(groupinfo2)]
+rownames(counttab3)<-rownames(counttab2)
+
+### check if Sample_ID is a perfect match
+all(colnames(counttab3) == rownames(groupinfo3))
+
+#set the organ appealing group in the plot
+groupinfo3$Growth_Method <- gsub("liquid", "inoculant", groupinfo3$Growth_Method)
+groupinfo3$Growth_Method <- gsub("EcoFAB", "sand", groupinfo3$Growth_Method)
+groupinfo3$Growth_Method <- factor(groupinfo3$Growth_Method, levels = c("sand","inoculant"))
+```
+
+
+# Calculate Shannin, Simpson, Richness, and Eveness
+```{r}
+selectedgrp = groupinfo3$G4
+alpha <- with(groupinfo3, tapply(specnumber(t(counttab3)), selectedgrp, mean))
+gamma <- with(groupinfo3, specnumber(t(counttab3), selectedgrp))
+beta<-gamma/alpha-1
+
+shannon<-diversity(t(counttab3))
+simps<-diversity(t(counttab3),"simpson")
+invsimps<-diversity(t(counttab3),"inv")
+rich<-specnumber(t(counttab3))
+even<-shannon/log(rich)
+
+groupinfo3$Shannon<-shannon
+groupinfo3$Simpson<-simps
+groupinfo3$InvSimpson<-invsimps
+groupinfo3$Richness<-rich
+groupinfo3$Evenness<-even
+```
+
+
+# Fig3B, Calculate and plot Beta diversity (PCoA)
+```{r}
+#### PCoA (Bray-Cirtis dissimilarity) calculation
+braydist<-vegdist(t(counttab3),method = "bray")
+brayfit<-cmdscale(braydist,eig=TRUE, k=2)
+eig <- brayfit$eig
+
+brayxy<-as.data.frame(brayfit$points)
+colnames(brayxy)<-c('X','Y')
+points <-as.data.frame(cbind(brayxy, groupinfo3))
+
+
+#### A colorblind-friendly palette for ggplot ####
+# The palette with grey:
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+# The palette with black:
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+# To use for fills, add scale_fill_manual(values=cbPalette)
+# To use for line and point colors, add scale_colour_manual(values=cbPalette)
+
+
+## Fig3B
+options(repr.plot.width = 15, repr.plot.height = 10)
+ggplot(points, aes(x=X, y=Y, 
+                   color=Growth_Method, 
+                   shape = as.factor(Inoc_Assay_Length)
+                   )) +
+  labs(x=paste("PCoA 1 (", format(100 * eig[1] / sum(eig), digits=4), "%)", sep=""),
+       y=paste("PCoA 2 (", format(100 * eig[2] / sum(eig), digits=4), "%)", sep="")) +
+  geom_point(size=3)+
+  scale_colour_manual(values=cbbPalette)+
+  labs(shape="Days post inoculation (DPI)", col="Sample type") +
+  theme_bw()
+ggsave(filename = "Fig3B.tiff", width = 5, height = 3, units = "in", device='tiff', dpi=300)
+
+
+# Perform PERMANOVA
+df_t_counttab3 <- as.data.frame(t(counttab3), rownames = T)
+adonis2<-adonis2(df_t_counttab3  ~ groupinfo3$G4, data=groupinfo3, permutations = 10000, method = "bray")
+adonis2
+
+adonis_Inoc_Length<-adonis2(df_t_counttab3  ~ groupinfo3$Inoc_Assay_Length, data=groupinfo3, permutations = 10000, method = "bray")
+adonis_Inoc_Length
+
+adonis2_Sample_Type<-adonis2(df_t_counttab3  ~ groupinfo3$Sample_Type, data=groupinfo3, permutations = 10000, method = "bray")
+adonis2_Sample_Type
+
+adosin2_sample_type__inoc_day <-adonis2(df_t_counttab3  ~ groupinfo3$Inoc_Assay_Length*groupinfo3$Sample_Type, data=groupinfo3, permutations = 10000, method = "bray")
+adosin2_sample_type__inoc_day 
+```
