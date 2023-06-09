@@ -1,7 +1,5 @@
 ---
 title: "14DAG_plant_biomass"
-author: "Hsiao-Han Lin"
-date: "2023-03-30"
 output: html_document
 ---
 
@@ -13,9 +11,6 @@ rm(list=ls())
 
 # Load the packages needed
 ```{r setup, include=FALSE}
-## set working directory
-setwd("C:/Users/hsiaohanlin/Documents/Set3/16S counts and code")
-
 knitr::opts_chunk$set(echo = TRUE)
 library(ggplot2)
 library(patchwork)
