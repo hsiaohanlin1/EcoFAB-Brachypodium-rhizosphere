@@ -1,0 +1,118 @@
+---
+title: "Fig9"
+output: html_document
+---
+
+############################################################################################################
+# Impact of inoculation practices on microbiota assembly and community stability in a fabricated ecosystem #
+############################################################################################################
+
+
+```{r, clears current global environment if necessary}
+rm(list = ls())
+```
+
+```{r, load the packages required}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(patchwork)
+library(plyr)
+library(multcompView)
+library(ggpubr)
+library(Hmisc)
+```
+
+```{r, load and setup data}
+##open data, makesure 'group' is a factor
+cfu <- read.csv("cfu.csv", header=T)
+head(cfu)
+
+#set the organ appealing group in the plot
+cfu$group <- gsub("0dpi", "0", cfu$group)
+cfu$group <- gsub("6dpi", "6", cfu$group)
+cfu$group <- gsub("14dpi", "14", cfu$group)
+cfu$group <- gsub("21dpi", "21", cfu$group)
+cfu$group <- gsub("21_sand", "sand", cfu$group)
+cfu$group <- gsub("21_rhizosphere", "rhizosphere", cfu$group)
+cfu$group <- gsub("21_root", "root", cfu$group)
+
+#set group according to data
+cfu$group <- factor(cfu$group,levels=c("0","6","14","21","sand","rhizosphere","root"))
+
+#set  x, y value for ANOVA & multiple comparison
+cfu_anova <- data.frame(lev=cfu$group, y=cfu$cfu_g)
+
+################################################
+## perform ANOVA & Multiple comparism for plotting
+anova <- aov(y~lev, data=cfu_anova)
+tHSD <- TukeyHSD(anova, ordered = FALSE, conf.level = 0.95)
+
+generate_label_df <- function(HSD, flev){
+  # Extract labels and factor levels from Tukey post-hoc 
+  Tukey.levels <- HSD[[flev]][,4]
+  Tukey.labels <- multcompLetters(Tukey.levels)['Letters']
+  plot.labels <- names(Tukey.labels[['Letters']])
+  
+  # Get highest quantile for Tukey's 5 number summary and add a bit of space to buffer between    
+  # upper quantile and label placement
+  boxplot.df <- ddply(cfu_anova, flev, function (x) max(fivenum(x$y)) + 0.4)
+  
+  # Create a data frame out of the factor levels and Tukey's homogenous group letters
+  plot.levels <- data.frame(plot.labels, labels = Tukey.labels[['Letters']],
+                            stringsAsFactors = FALSE)
+  
+  # Merge it with the labels
+  labels.df <- merge(plot.levels, boxplot.df, by.x = 'plot.labels', by.y = flev, sort = FALSE)
+  
+  return(labels.df)
+}
+
+# Print ANOVA and TukeyHSD results
+summary(anova)
+tHSD
+```
+
+```{r, Calculate the mean and SD of each condition/treatment pair}
+agg_cfu=aggregate(cfu_g ~ group, data=cfu, FUN="mean") #mean
+agg_cfu$sd=aggregate(cfu_g ~ group, data=cfu, FUN="sd")$cfu #add the SD 
+dodge <- position_dodge(width=0.9) 
+limits <- aes(ymax=cfu_g+sd, ymin=cfu_g-sd) #Set up the error bars
+```
+
+
+```{r, Draw and print the data}
+options(repr.plot.width = 7, repr.plot.height = 10)
+
+fig9 <- ggplot(cfu, aes(x=group, y=cfu_g, width=0.75)) +
+  ylim(0,11)+
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"))+
+  
+  #draw barplot,error bar, and data points
+  geom_bar(data=agg_cfu, position=dodge, stat="identity", color = "black", fill= "white") +
+  geom_errorbar(data=agg_cfu, mapping=limits, position=dodge, width=0.25) +
+  geom_point(data=cfu, aes(group,cfu_g), position = position_dodge2(0.75, preserve = 'single'), size=1.5) +
+  geom_vline(xintercept = 4.5) +
+  
+  #add the ANOVA and Post hoc results into the plot
+  stat_compare_means(method = "anova", size=6, label.x = 1, label.y = 9.3) +
+  geom_text(data = generate_label_df(tHSD, 'lev'), 
+            aes(x = plot.labels, y = V1+0.5, label = labels), size=4)+
+  
+  #setup texts in the graph
+  theme(axis.text.x = element_text(color="black", size = 12),
+        axis.text.y = element_text(color="black", size = 12),
+        plot.margin = unit(c(0.2, 0.2, 0.3, 0.2), "inches"))+
+  theme(legend.position='none')+
+  labs(x = " ",
+       y =expression("log(CFU/g)")
+       ) + 
+   xlab(expression(atop("______________________________          ______________________", 
+                        paste("           SynCom without a plant (DPI)             SynCom with a plant at 21 DPI")))) +
+  scale_y_continuous(breaks=seq(0,11,2)) +
+  theme_bw()
+fig9
+
+ggsave(filename = "Fig9.tiff", width = 6.5, height = 4, units = "in", device='tiff', dpi=300)
+ggsave(filename = "Fig9.jpg", width = 6.5, height = 4, units = "in", device='jpg', dpi=300)
+```
+
